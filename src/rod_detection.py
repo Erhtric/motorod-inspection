@@ -1,158 +1,89 @@
 import cv2
-import math
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List
 from src.preprocess import apply_filter, binarize
+from src.blob_utils import get_connected_component, get_moments, get_mass_center, find_MER, get_major_axis
 
 
-def get_connected_component(rod_info, i):
-    """
-    Returns the connected component with the given index.
-
+def get_width_at_mass_center(img, ext_contours, theta, mc, visualize=True):
+    """Compute the width of the object at the barycenter
+    
     Parameters
     ----------
-    rod_info : dict
-        Dictionary containing information about the rods.
-    i : int
-        Index of the connected component to return.
-
-    Returns
-    -------
-    numpy.ndarray
-        Connected component with the given index.
-    """
-    mask = np.zeros_like(rod_info["labels"], dtype=np.uint8)
-    mask[rod_info["labels"] == i] = 255
-    return mask
-
-
-def get_moments(contours):
-    """
-    Returns the moments of the given contours.
-
-    Central moments: mu20, mu11, mu02, mu30, mu21, mu12, mu03
-    https://docs.opencv.org/3.4/d8/d23/classcv_1_1Moments.html
-
-    Parameters
-    ----------
-    contours : list
+    img : numpy.ndarray
+        Image to process.
+    ext_contours : list
         List of contours to process.
-
+    theta : float
+        Angle of the major axis of the object.
+    mc : tuple
+        Tuple containing the mass center of the object.
+        
     Returns
     -------
-    list
-        List of moments up to the third order."""
-    mu = [None] * len(contours)
-    for j in range(len(contours)):
-        mu[j] = cv2.moments(contours[j])
-    return mu
-
-
-def get_ellipse_axis(contours, barycenter):
+    width_barycenter : float
+        Width of the object at the barycenter.
     """
-    Returns the major and minor axis of the given contours. The axis both
-    pass through the barycenter of the contours.
+    def signed_distance(a, b, c, i, j):
+        """Compute the signed distance of a point (i, j) from the line ax + by + c = 0"""
+        return (a*j + b*i + c) / np.sqrt(a*a + b*b)
+    
+    a, b, c = get_major_axis(theta, mc)
 
-    Parameters
-    ----------
-    contours : list
-        List of contours to process.
-    barycenter : tuple
-        Barycenter of the contours.
+    # create a binary image representing the contour of the object
+    contour_img = np.zeros_like(img)
+    cv2.polylines(contour_img, ext_contours, True, 1, 1)
 
-    Returns
-    -------
-    tuple
-        the fitted ellipse, the major axis and the minor axis."""
-    contours = np.array(contours[0])
-    # Fit an ellipse around the contour
-    ellipse = cv2.fitEllipse(contours)
-    _, (MA, ma), angle = ellipse
+    # Iterate over the image to get the signed distances
+    left_points = []
+    right_points = []
+    for i in range(contour_img.shape[0]):
+        for j in range(contour_img.shape[1]):
+            if contour_img[i, j] == 1:
+                d = signed_distance(a, b, c, i, j)
 
-    # Convert the angle to the range [0, 180]
-    angle = angle % 180
+                # Compute the euclidean distance with respect to the barycenter and assign the sign
+                d = np.sqrt((j - mc[0]) ** 2 + (i - mc[1]) ** 2) * np.sign(d)
 
-    bX, bY = barycenter
+                # Create two lists of points, one for the points on the left (positive) and one for the points on the right (negative)
+                if d > 0:
+                    left_points.append((j, i, d))
+                elif d < 0:
+                    right_points.append((j, i, d))
 
-    print(MA, ma)
+    # Find the points with the minimum distance on the left and on the right
+    left_points = np.array(left_points)
+    right_points = np.array(right_points)
 
-    # Extrema of the major axis
-    MA_x1 = int(bX + (MA / 2) * np.cos(np.deg2rad(angle)))
-    MA_y1 = int(bY + (MA / 2) * np.sin(np.deg2rad(angle)))
-    MA_x2 = int(bX - (MA / 2) * np.cos(np.deg2rad(angle)))
-    MA_y2 = int(bY - (MA / 2) * np.sin(np.deg2rad(angle)))
+    # Compute the absolute minimum distance
+    min_left_idx = np.argmin(np.abs(left_points[:, 2]), axis=0)
+    p_left = np.int0(left_points[min_left_idx][:2])
+    min_right_idx = np.argmin(np.abs(right_points[:, 2]), axis=0)
+    p_right = np.int0(right_points[min_right_idx][:2])
 
-    # Extrema of the minor axis
-    ma_x1 = int(bX + (ma / 2) * np.sin(np.deg2rad(angle)))
-    ma_y1 = int(bY - (ma / 2) * np.cos(np.deg2rad(angle)))
-    ma_x2 = int(bX - (ma / 2) * np.sin(np.deg2rad(angle)))
-    ma_y2 = int(bY + (ma / 2) * np.cos(np.deg2rad(angle)))
+    width_barycenter = np.sqrt((p_left[0] - p_right[0]) ** 2 + (p_left[1] - p_right[1]) ** 2)
 
-    return (
-        ellipse,
-        ((MA_x1, MA_y1), (MA_x2, MA_y2)),
-        ((ma_x1, ma_y1), (ma_x2, ma_y2)),
-    )
+    if visualize:
+        # Draw the points
+        output = img.copy()
+        output = cv2.cvtColor(contour_img, cv2.COLOR_GRAY2RGB)
 
+        cv2.circle(output, tuple(p_left), 5, (255, 0, 0), -1)       # red
+        cv2.circle(output, tuple(p_right), 5, (0, 0, 255), -1)      # blue
 
-def get_mass_center(contours, mu):
-    """
-    Returns the mass center (or barycenter in this case) of the
-    given contours representing an object.
+        # Given a,b,c draw the line ax + by + c = 0
+        def draw_line(a, b, c, img, color=(255, 255, 255)):
+            if b == 0:
+                cv2.line(img, (0, int(-c / a)), (img.shape[1], int(-c / a)), color, 1)
+            else:
+                cv2.line(img, (0, int(-c / b)), (img.shape[1], int((-a * img.shape[1] - c) / b)), color, 1,)
 
-    C_x = M10 / M00
-    C_y = M01 / M00
+        draw_line(a, b, c, output, (255, 0, 0))
+        return width_barycenter, output
 
-    Parameters
-    ----------
-    contours : list
-        List of contours to process.
-
-    Returns
-    -------
-    mu : list
-        List of moments of the contours."""
-    mc = [None] * len(contours)
-    for j in range(len(contours)):
-        mc[j] = (
-            # add 1e-5 to avoid division by zero
-            mu[j]["m10"] / (mu[j]["m00"] + 1e-5),
-            mu[j]["m01"] / (mu[j]["m00"] + 1e-5),
-        )
-    return mc
-
-
-def findMER(contours):
-    """
-    Returns the minimum enclosing rectangle of the given contour.
-
-    Parameters
-    ----------
-    contours : numpy.ndarray
-        Contour to process.
-
-    Returns
-    -------
-    numpy.ndarray
-        Array of points representing the minimum enclosing rectangle.
-
-    tuple
-        Tuple containing the center, width, height and angle of the rectangle.
-    """
-    contour_points = np.array(contours)
-
-    # Compute the minimum enclosing rectangle
-    rectangle = cv2.minAreaRect(contour_points)
-    ((rX, rY), (width, height), angle) = rectangle
-
-    # Get the box points of the rectangle
-    box = cv2.boxPoints(rectangle)
-    box = np.int0(box)
-
-    return box, ((rX, rY), (width, height), angle)
-
-
+    return width_barycenter
+    
 def detect_rods_blob(image, visualize=True):
     """
     This method detects the rods objects in the given image using blob detection and
@@ -187,13 +118,14 @@ def detect_rods_blob(image, visualize=True):
         "width": [],
     }
 
-    img = apply_filter(img, sigma=1.0)
+    img = apply_filter(img, sigma=0.5)
     binary_img = binarize(img)
+    output = None
 
     # https://docs.opencv.org/3.4/d3/dc0/group__imgproc__shape.html#gae57b028a2b2ca327227c2399a9d53241
     # Find the connected components in the binary image
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        binary_img, connectivity=4
+        binary_img, connectivity=8
     )
 
     rod_info["num_labels"] = num_labels
@@ -207,7 +139,7 @@ def detect_rods_blob(image, visualize=True):
         # Loop over the connected components, 0 is the background
         print("Processing rod {}...".format(i))
         # Get the masked image, now the image will contain only one rod
-        comp = get_connected_component(rod_info, i)
+        comp = get_connected_component(rod_info["labels"], i)
 
         # Those are the statistics about the connected component
         (cX, cY) = rod_info["centroids"][i]
@@ -260,47 +192,50 @@ def detect_rods_blob(image, visualize=True):
         print("Rod {}: type: {}".format(i, rod_type))
 
         # Get the minimum enclosing rectangle of the rod
-        box, ((rX, rY), (r_width, r_height), angle) = findMER(ext_contours[0])
+        box, ((rX, rY), (r_width, r_height), _ ) = find_MER(contours[0])
 
         # Get the length of the rod
         length = max(r_width, r_height)
         rod_info["length"].append(length)
-        print("Rod {}: length (of the Major Axis): {}".format(i, length))
+        print("Rod {}: length (MER): {}".format(i, length))
 
         # Get the width of the rod
         width = min(r_width, r_height)
         rod_info["width"].append(width)
-        print("Rod {}: width (of the Minor Axis): {}".format(i, width))
-
-        # The angle of the rod is the angle of the minimum enclosing rectangle
-        # The angle is modulo pi
-        angle = angle % 180
-        rod_info["angle"].append(angle)
-        print("Rod {}: angle: {}".format(i, angle))
+        print("Rod {}: width (MER): {}".format(i, width))
 
         # Get the central moments of the rod, those are invariant to translation and scaling
         # To get invariance to scaling nu20, nu11, nu02, nu30, nu21, nu12, nu03 are used
         mu = get_moments(ext_contours)
-        print("Rod {}: moments: {}".format(i, mu))
 
         # Get the mass centers of the rod
         mc = get_mass_center(ext_contours, mu)
-        rod_info["barycenter"].append(mc)
+        rod_info["barycenter"].extend(mc)
         print("Rod {}: mass center(s): {}".format(i, mc))
+
+        # Get the orientation of the rod modulo pi, namely the angle between the major axis of the
+        # horizontal axis of the image
+        angle = 0.5 * np.arctan((2 * mu[0]['nu11']) / (mu[0]['nu02'] - mu[0]['nu20'])) + np.pi / 2
+        print("Rod {}: angle (mod pi): {}".format(i, angle))
+        rod_info["angle"].append(angle)
+
+        # Compute the width of the rod at the mass center
+        width_mc, output = get_width_at_mass_center(binary_img, ext_contours[0], angle, mc[0], visualize=visualize)
+        print("Rod {}: width at mass center: {}".format(i, width_mc))
 
         if visualize:
             # Plot the connected component
-            output = binary_img.copy()
-            output = cv2.cvtColor(output, cv2.COLOR_GRAY2RGB)
-            plt.figure(figsize=(5, 5))
+            if output is None:
+                output = binary_img.copy()
+                output = cv2.cvtColor(output, cv2.COLOR_GRAY2RGB)
 
-            # Draw the center mass
+                      # Draw the center mass
             for m in mc:
                 cv2.circle(output, (int(m[0]), int(m[1])), 4, (255, 0, 255), -1)
                 cv2.putText(
                     output,
                     str(i),
-                    (int(cX) - 12, int(cY) - 12),
+                    (int(cX) - 20, int(cY) - 20),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.5,
                     (255, 0, 0),
@@ -310,10 +245,15 @@ def detect_rods_blob(image, visualize=True):
             # Draw the MER
             cv2.drawContours(output, [box], -1, (0, 255, 0), 1)
 
-            # Draw the contours
-            cv2.drawContours(output, ext_contours, -1, (0, 0, 255), 1)
-            cv2.drawContours(output, holes_contours, -1, (255, 0, 0), 1)
+            # Draw the major and minor axis
+            # cv2.line(output, tuple(P1), tuple(P2), (255, 0, 0), 2)
+            # cv2.line(output, tuple(P3), tuple(P4), (0, 255, 255), 2)
 
+            # Draw the contours
+            cv2.drawContours(output, ext_contours, -1, (255, 255, 255), 1)
+            cv2.drawContours(output, holes_contours, -1, (255, 255, 255), 1)
+
+            plt.figure(figsize=(7, 7))
             plt.imshow(output, cmap="gray")
             plt.title("Rod {}".format(i))
             plt.show()
