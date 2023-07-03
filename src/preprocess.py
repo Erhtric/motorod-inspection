@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 
-def apply_filter(img, sigma):
+def apply_gaussian_filter(img, sigma):
     """
     This method applies a Gaussian filter to the given image.
 
