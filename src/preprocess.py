@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-
+import logging
 
 def apply_gaussian_filter(img, sigma):
     """
@@ -22,7 +22,7 @@ def apply_gaussian_filter(img, sigma):
     """
     kernel_size = int(np.ceil((3 * sigma)) * 2 + 1)
 
-    print(
+    logging.info(
         "Gaussian filter parameters --- sigma: {}, kernel size: {}".format(
             sigma, kernel_size
         )

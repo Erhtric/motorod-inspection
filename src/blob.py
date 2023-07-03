@@ -254,3 +254,66 @@ def get_holes_diameter(int_contour):
         _, radius = cv2.minEnclosingCircle(hole)
         diameter.append(2 * radius)
     return diameter
+
+def get_width_at_mass_center(img, ext_contours, mu, mc):
+    """Compute the width of the object at the barycenter
+    
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Image to process.
+    ext_contours : list
+        List of contours to process.
+    theta : float
+        Angle of the major axis of the object.
+    mu : list
+        List of moments of the contours.
+    mc : tuple
+        Tuple containing the mass center of the object.
+        
+    Returns
+    -------
+    width_barycenter : float
+        Width of the object at the barycenter.
+    
+    tuple
+        Tuple containing the points on the left and on the right of the object.
+    """
+    # Compute the signed distance from the major axis  
+    def signed_distance(MA_coeffs, mc, i, j):
+        vect = np.array([j, i]) - mc
+        return np.dot(MA_coeffs, vect)
+
+    MA_coeffs, angle = compute_major_axis(mu[0], mc)
+
+    # create a binary image representing the contour of the object
+    contour_img = np.zeros_like(img)
+    cv2.polylines(contour_img, ext_contours, True, 1, 1)
+
+    # Iterate over the image to get the signed distances
+    left_points = []
+    right_points = []
+    for i in range(contour_img.shape[0]):
+        for j in range(contour_img.shape[1]):
+            if contour_img[i, j] == 1:
+                d = signed_distance(MA_coeffs, mc, i, j)
+
+                # Create two lists of points, one for the points on the left (positive) and one for the points on the right (negative)
+                if d > 0:
+                    left_points.append((j, i, d))
+                elif d < 0:
+                    right_points.append((j, i, d))
+
+    # Find the points with the minimum distance on the left and on the right
+    left_points = np.array(left_points)
+    right_points = np.array(right_points)
+
+    # Compute the absolute minimum distance
+    min_left_idx = np.argmin(np.abs(left_points[:, 2]), axis=0)
+    p_left = np.int0(left_points[min_left_idx][:2])
+    min_right_idx = np.argmin(np.abs(right_points[:, 2]), axis=0)
+    p_right = np.int0(right_points[min_right_idx][:2])
+
+    width_barycenter = np.sqrt((p_left[0] - p_right[0]) ** 2 + (p_left[1] - p_right[1]) ** 2)
+
+    return width_barycenter, (p_left, p_right)

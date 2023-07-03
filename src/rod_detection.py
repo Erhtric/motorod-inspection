@@ -1,74 +1,13 @@
 import cv2
-import math
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List
 from src.preprocess import apply_gaussian_filter, binarize
-from src.blob import get_axes_by_ellipse, compute_major_axis, get_connected_component, get_moments, get_mass_center, find_MER, get_holes_diameter
+from src.blob import get_axes_by_ellipse, get_width_at_mass_center, get_connected_component, get_moments, get_mass_center, find_MER, get_holes_diameter
 from src.contours import find_contours
 
-def get_width_at_mass_center(img, ext_contours, mu, mc):
-    """Compute the width of the object at the barycenter
-    
-    Parameters
-    ----------
-    img : numpy.ndarray
-        Image to process.
-    ext_contours : list
-        List of contours to process.
-    theta : float
-        Angle of the major axis of the object.
-    mu : list
-        List of moments of the contours.
-    mc : tuple
-        Tuple containing the mass center of the object.
-        
-    Returns
-    -------
-    width_barycenter : float
-        Width of the object at the barycenter.
-    
-    tuple
-        Tuple containing the points on the left and on the right of the object.
-    """
-    # Compute the signed distance from the major axis  
-    def signed_distance(MA_coeffs, mc, i, j):
-        vect = np.array([j, i]) - mc
-        return np.dot(MA_coeffs, vect)
-
-    MA_coeffs, angle = compute_major_axis(mu[0], mc)
-
-    # create a binary image representing the contour of the object
-    contour_img = np.zeros_like(img)
-    cv2.polylines(contour_img, ext_contours, True, 1, 1)
-
-    # Iterate over the image to get the signed distances
-    left_points = []
-    right_points = []
-    for i in range(contour_img.shape[0]):
-        for j in range(contour_img.shape[1]):
-            if contour_img[i, j] == 1:
-                d = signed_distance(MA_coeffs, mc, i, j)
-
-                # Create two lists of points, one for the points on the left (positive) and one for the points on the right (negative)
-                if d > 0:
-                    left_points.append((j, i, d))
-                elif d < 0:
-                    right_points.append((j, i, d))
-
-    # Find the points with the minimum distance on the left and on the right
-    left_points = np.array(left_points)
-    right_points = np.array(right_points)
-
-    # Compute the absolute minimum distance
-    min_left_idx = np.argmin(np.abs(left_points[:, 2]), axis=0)
-    p_left = np.int0(left_points[min_left_idx][:2])
-    min_right_idx = np.argmin(np.abs(right_points[:, 2]), axis=0)
-    p_right = np.int0(right_points[min_right_idx][:2])
-
-    width_barycenter = np.sqrt((p_left[0] - p_right[0]) ** 2 + (p_left[1] - p_right[1]) ** 2)
-
-    return width_barycenter, (p_left, p_right)
+logging.basicConfig(level=logging.INFO)
 
 def detect_contact_points(img):
     """
@@ -137,7 +76,24 @@ def separate_rods(img):
     plt.figure(figsize=(10, 10))
     plt.imshow(img, cmap="gray")
 
-def detect_rods_blob(image, visualize=True):
+def filter_rods_by_area(rod_info, labels, num_labels, stats, min_area):
+    # Filter out in the labels the small components
+    rod_info["labels"] = np.zeros_like(labels)
+    count = 1
+    for i in range(1, num_labels):          # Skip background
+        if stats[i][4] > min_area:
+            rod_info["labels"][labels == i] = count
+            count += 1
+
+    stats = stats[stats[:, 4] > min_area]
+    
+    rod_info["stats"] = stats
+    rod_info["num_labels"] = rod_info["stats"].shape[0]
+    rod_info["number_of_rods"] = rod_info["num_labels"] - 1  # Remove background
+
+    return rod_info, stats, labels, num_labels
+
+def detect_rods_blob(image, min_area=None, visualize=True):
     """
     This method detects the rods objects in the given image using blob detection and
     counts the number of holes in each rod.
@@ -146,21 +102,28 @@ def detect_rods_blob(image, visualize=True):
     ----------
     img : numpy.ndarray
         Image to process.
+    min_area : int, optional
+        Minimum area of the blobs to consider, by default None
+    visualize : bool, optional
+        Whether to visualize the results, by default True
 
     Returns
     -------
     dict
         Dictionary containing information about the rods.
     """
+    # Set the logging level to INFO
+    logging.getLogger().setLevel(logging.INFO)
+
     img = image.copy()
     output = image.copy()
     output = cv2.cvtColor(output, cv2.COLOR_GRAY2RGB)
-
 
     rod_info = {
         "num_labels": None,
         "labels": None,
         "number_of_rods": None,
+        "stats": None,
         "contours": [],
         "hierarchy": [],
         "number_of_holes": [],
@@ -189,37 +152,28 @@ def detect_rods_blob(image, visualize=True):
         binary_img, connectivity=8
     )
 
-    rod_info["number_of_rods"] = num_labels - 1  # Remove background
-    rod_info["num_labels"] = num_labels
-    rod_info["labels"] = labels
+    if min_area is not None:
+        logging.info("Filtering rods by area...")
+        rod_info, stats, labels, num_labels = filter_rods_by_area(rod_info, labels, num_labels, stats, min_area)
+    else:
+        rod_info["number_of_rods"] = num_labels - 1  # Remove background
+        rod_info["num_labels"] = num_labels
+        rod_info["labels"] = labels
 
-    # # Filter out in the labels the small components
-    # min_area = 500
-    # rod_info["labels"] = np.zeros_like(labels)
-    # count = 1
-    # for i in range(1, num_labels):
-    #     if stats[i][4] > min_area:
-    #         rod_info["labels"][labels == i] = count
-    #         count += 1
+    logging.info("Number of rods found (CC): {}".format(rod_info["number_of_rods"]))
 
-    # stats = stats[stats[:, 4] > minArea]
-    # rod_info["num_labels"] = stats.shape[0]
-    # rod_info["number_of_rods"] = rod_info["num_labels"] - 1  # Remove background
-
-    print("Number of rods found (CC): {}".format(rod_info["number_of_rods"]))
-
-    print("Processing connected components individually...\n")
+    logging.info("Processing connected components individually...\n")
     for i in range(1, rod_info["num_labels"]):
         # Loop over the connected components, 0 is the background
-        print("Processing rod {}...".format(i))
+        logging.info("Processing rod {}...".format(i))
         # Get the masked image, now the image will contain only one rod
         comp = get_connected_component(rod_info["labels"], i)
 
         _, _, _, _, area = stats[i]
         rod_info["area"].append(area)
 
-        print("Centroid (CC): {}".format(tuple(np.int0(centroid[i]))))
-        print("Area (CC): {}".format(area))
+        logging.info("Centroid (CC): {}".format(tuple(np.int0(centroid[i]))))
+        logging.info("Area (CC): {}".format(area))
 
         contours, hierarchy, ext_contours, holes_contours = find_contours(comp)
         rod_info["contours"].append(contours)
@@ -232,7 +186,7 @@ def detect_rods_blob(image, visualize=True):
             if hierarchy[0][j][2] == -1 and hierarchy[0][j][3] > -1
         )
 
-        print("Number of holes: {}".format(n_holes))
+        logging.info("Number of holes: {}".format(n_holes))
         rod_info["number_of_holes"].append(n_holes)
 
         # Rod type detection
@@ -244,7 +198,7 @@ def detect_rods_blob(image, visualize=True):
             rod_type = "Unknown"
 
         rod_info["rod_type"].append(rod_type)
-        print("Rod type: {}\n".format(rod_type))
+        logging.info("Rod type: {}\n".format(rod_type))
 
         # Get the minimum enclosing rectangle of the rod
         box, (_, (width, height), angle) = find_MER(ext_contours[0])
@@ -253,10 +207,10 @@ def detect_rods_blob(image, visualize=True):
         rod_info["width"].append(width)
         rod_info["angle"].append(angle)
 
-        print("Rod Length: {:.4f}".format(rod_info["length"][-1]))
-        print("Rod Width: {:.4f}".format(rod_info["width"][-1]))
-        print("Rod Angle (deg): {:.4f}".format(rod_info["angle"][-1]))
-        print("Rod Angle (rad): {:.4f}\n".format(np.deg2rad(rod_info["angle"][-1])))
+        logging.info("Rod Length: {:.4f}".format(rod_info["length"][-1]))
+        logging.info("Rod Width: {:.4f}".format(rod_info["width"][-1]))
+        logging.info("Rod Angle (deg): {:.4f}".format(rod_info["angle"][-1]))
+        logging.info("Rod Angle (rad): {:.4f}\n".format(np.deg2rad(rod_info["angle"][-1])))
 
         # Get the major and minor axis of the ellipse
         MA, ma = get_axes_by_ellipse(ext_contours[0])
@@ -268,25 +222,25 @@ def detect_rods_blob(image, visualize=True):
         # Get the mass centers of the rod
         mc = get_mass_center(ext_contours, mu)
         rod_info["barycenter"].extend(mc)
-        print("Rod mass center: {}".format(mc[0]))
+        logging.info("Rod mass center: {}".format(mc[0]))
 
         # Compute the width of the rod at the mass center
         width_mc, (p_left, p_right) = get_width_at_mass_center(binary_img, ext_contours[0], mu, mc[0])
-        print("Width at mass center: {:.4f}".format(width_mc))
+        logging.info("Width at mass center: {:.4f}".format(width_mc))
 
         # Get the position of the center of the hole(s)
         # We simply compute the mass center of the internal contours
         if n_holes > 0:
             holes_mc = get_mass_center(holes_contours, get_moments(holes_contours))
             rod_info["holes_barycenter"].append(holes_mc)
-            print("Hole mass center: {}".format(holes_mc))
+            logging.info("Hole mass center: {}".format(holes_mc))
 
         # Obtain the diameters of the holes, we can simply assume that the holes are circles
         # and compute the diameter from the radius of the minimum enclosing circle
         diameter = get_holes_diameter(holes_contours)
 
         rod_info["holes_diameter"].append(diameter)    
-        print("Hole diameter: {}".format(diameter))
+        logging.info("Hole diameter: {}".format(diameter))
 
         if visualize:
 
@@ -302,7 +256,6 @@ def detect_rods_blob(image, visualize=True):
                 (255, 0, 0),
                 1,
             )
-
 
             # Draw the MER
             cv2.drawContours(output, [box], -1, (0, 0, 255), 1)
@@ -321,22 +274,22 @@ def detect_rods_blob(image, visualize=True):
             # # Draw the horizontal line passing through the barycenter
             # cv2.line(output, (0, m[1]), (img.shape[1], m[1]), (0, 255, 0), 1)
             
-        print()
-        print("*^" * 50)
-        print()
+        logging.info("\n" + "*^" * 50 + "\n")
 
     fig, ax = plt.subplots(figsize=(8, 8))
     im = ax.imshow(output)
-    ax.set_title("Rod {}".format(i))
     plt.show()
 
     return rod_info
 
-
 def detect_rods(images: list, names: List[str], visualize=True):
     results = {}
     for image, name in zip(images, names):
-        print("Processing image: {}".format(name))
+        logging.info("Processing image: {}".format(name))
+
+        # Mute the logging
+        logging.getLogger().setLevel(logging.ERROR)
+
         rod_info = detect_rods_blob(image, visualize=visualize)
         results[name] = rod_info
 
