@@ -188,53 +188,6 @@ def get_axes_by_ellipse(contours: np.ndarray):
 
     return MA, ma
 
-def compute_major_axis(mu, mc):
-    """
-    Returns the major axis by computing the covariance matrix on the second
-    order central moments.
-
-    Parameters
-    ----------
-    mu : dict
-        Dictionary of moments of the contour.
-    mc : tuple
-        Tuple containing the center of the contour.
-
-    Returns
-    -------
-    numpy.ndarray
-        Array of coefficients of the major axis.
-    
-    float
-        Angle of the major axis wrt the horizontal axis.
-    """
-
-    # Calculate the covariance matrix
-    u20 = mu['mu20'] / mu['m00']
-    u11 = mu['mu11'] / mu['m00']
-    u02 = mu['mu02'] / mu['m00']
-
-    cov_matrix = np.array([[u20, u11],
-                            [u11, u02]])
-
-    # Compute the eigenvectors and eigenvalues
-    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
-
-    # Sort the eigenvectors based on eigenvalues
-    sorted_indices = np.argsort(eigenvalues)[::-1]
-    sorted_eigenvectors = eigenvectors[:, sorted_indices]
-
-    # Determine the major axis coefficients
-    major_axis_coeffs = sorted_eigenvectors[:, 0]
-
-    # Calculate the angle of the major axis
-    angle = np.arctan(major_axis_coeffs[0] / major_axis_coeffs[1]) + np.pi / 2
-
-    # Optionally normalize the coefficients
-    major_axis_coeffs /= np.linalg.norm(major_axis_coeffs)
-
-    return major_axis_coeffs, angle
-
 def get_holes_diameter(int_contour):
     """
     Returns the diameter of the holes in the given contour.
@@ -317,3 +270,50 @@ def get_width_at_mass_center(img, ext_contours, mu, mc):
     width_barycenter = np.sqrt((p_left[0] - p_right[0]) ** 2 + (p_left[1] - p_right[1]) ** 2)
 
     return width_barycenter, (p_left, p_right)
+
+def compute_major_axis(mu, mc):
+    """
+    Returns the major axis by computing the covariance matrix on the second
+    order central moments.
+
+    Parameters
+    ----------
+    mu : dict
+        Dictionary of moments of the contour.
+    mc : tuple
+        Tuple containing the center of the contour.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of coefficients of the major axis.
+    
+    float
+        Angle of the major axis wrt the horizontal axis.
+    """
+
+    # Calculate the covariance matrix
+    u20 = mu['mu20'] / mu['m00']
+    u11 = mu['mu11'] / mu['m00']
+    u02 = mu['mu02'] / mu['m00']
+
+    cov_matrix = np.array([[u20, u11],
+                            [u11, u02]])
+
+    # Compute the eigenvectors and eigenvalues
+    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+
+    # Sort the eigenvectors based on eigenvalues
+    sorted_indices = np.argsort(eigenvalues)[::-1]
+    sorted_eigenvectors = eigenvectors[:, sorted_indices]
+
+    # Determine the major axis coefficients
+    major_axis_coeffs = sorted_eigenvectors[:, 0]
+
+    # Calculate the angle of the major axis
+    angle = np.arctan(major_axis_coeffs[0] / major_axis_coeffs[1]) + np.pi / 2
+
+    # Optionally normalize the coefficients
+    major_axis_coeffs /= np.linalg.norm(major_axis_coeffs)
+
+    return major_axis_coeffs, angle

@@ -2,6 +2,7 @@ import cv2
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from typing import List
 from src.preprocess import apply_gaussian_filter, binarize
 from src.blob import get_axes_by_ellipse, get_width_at_mass_center, get_connected_component, get_moments, get_mass_center, find_MER, get_holes_diameter
@@ -9,7 +10,7 @@ from src.contours import find_contours
 
 logging.basicConfig(level=logging.INFO)
 
-def detect_contact_points(img):
+def detect_contact_points(img, min_area):
     """
     This method detects the contact points between the rods.
 
@@ -26,11 +27,11 @@ def detect_contact_points(img):
     contact_points : list
         List of contact points.
     """
-    _, contours, hierarchy = cv2.findContours(img, 2, cv2.CHAIN_APPROX_SIMPLE)
+    _, contours, hierarchy = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     contact_points = []
     for i, contour in enumerate(contours):
-        if cv2.contourArea(contour) > 1500:
+        if cv2.contourArea(contour) > min_area:
             # Approximate the contour with a polygon
             # contour = cv2.approxPolyDP(contour, 2, True)
             contoursHull = cv2.convexHull(contour, returnPoints=False)
@@ -39,42 +40,47 @@ def detect_contact_points(img):
             for j in range(defects.shape[0]):
                 defpoint = defects[j][0]
                 pt = tuple(contour[defpoint[2]][0])  # Get defect point
-                r3x3 = (pt[0] - 2, pt[1] - 2, 5, 5)  # Create 5x5 Rect from defect point
+                rect = (pt[0] - 2, pt[1] - 2, 5, 5)  # Create 5x5 Rect from defect point
 
-                # Make sure the rect is within the image bounds
-                # r3x3 = (max(r3x3[0], 0), max(r3x3[1], 0), min(r3x3[2], img.shape[1]), min(r3x3[3], img.shape[0]))
-
-                non_zero_pixels = np.count_nonzero(img[r3x3[1]:r3x3[1]+r3x3[3], r3x3[0]:r3x3[0]+r3x3[2]])
+                non_zero_pixels = np.count_nonzero(img[rect[1]:rect[1] + rect[3], rect[0]:rect[0] + rect[2]])
                 if non_zero_pixels > 17:
                     contact_points.append(pt)
 
     return contact_points
 
-def separate_rods(img):
+def separate_rods(img, contact_points, distance, thickness):
     """
-    This method separates the rods in the given image.
+    This method separates the rods in the given image given a list of contact points. We firstly 
+    detect those contact points and then we draw a black line between the nearby contact points. 
 
     Parameters
     ----------
     img : numpy.ndarray
         Binary Image to process.
-
+    contact_points : list
+        List of contact points.
+    distance : int, optional
+        Distance between contact points to consider
+        
     Returns
     -------
     img : numpy.ndarray
         Binary Image with the rods separated.
     """
-    contact_points = detect_contact_points(img)
-
-    # Draw a black line between nearby contact points
     for i in range(len(contact_points)):
         for j in range(i + 1, len(contact_points)):
-            if np.linalg.norm(np.array(contact_points[i]) - np.array(contact_points[j])) < 20:
-                cv2.line(img, contact_points[i], contact_points[j], 0, 2)
+
+            if np.linalg.norm(np.array(contact_points[i]) - np.array(contact_points[j])) < distance:
+   
+                # Draw a black line between the contact points
+                cv2.line(img, contact_points[i], contact_points[j], 0, thickness)
+
+    # Create a structuring element for erosion
+    # Perform erosion
+    # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+    # morph_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
 
     return img
-    plt.figure(figsize=(10, 10))
-    plt.imshow(img, cmap="gray")
 
 def filter_rods_by_area(rod_info, labels, num_labels, stats, min_area):
     # Filter out in the labels the small components
@@ -93,7 +99,7 @@ def filter_rods_by_area(rod_info, labels, num_labels, stats, min_area):
 
     return rod_info, stats, labels, num_labels
 
-def detect_rods_blob(image, min_area=None, visualize=True):
+def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=True):
     """
     This method detects the rods objects in the given image using blob detection and
     counts the number of holes in each rod.
@@ -144,13 +150,16 @@ def detect_rods_blob(image, min_area=None, visualize=True):
     img = apply_gaussian_filter(img, sigma=1)
     binary_img = binarize(img)
 
-    # binary_img = separate_rods(binary_img)
+    if detect_contact_pts and min_area is not None:
+        contact_points = detect_contact_points(binary_img, min_area)
+        # for pt in contact_points:
+        #     cv2.circle(output, pt, 2, (255, 255, 0), -1)
+
+        binary_img = separate_rods(binary_img, contact_points, distance=20, thickness=2)
 
     # https://docs.opencv.org/3.4/d3/dc0/group__imgproc__shape.html#gae57b028a2b2ca327227c2399a9d53241
     # Find the connected components in the binary image
-    num_labels, labels, stats, centroid = cv2.connectedComponentsWithStats(
-        binary_img, connectivity=8
-    )
+    num_labels, labels, stats, centroid = cv2.connectedComponentsWithStats(binary_img, connectivity=8)
 
     if min_area is not None:
         logging.info("Filtering rods by area...")
@@ -162,10 +171,9 @@ def detect_rods_blob(image, min_area=None, visualize=True):
 
     logging.info("Number of rods found (CC): {}".format(rod_info["number_of_rods"]))
 
-    logging.info("Processing connected components individually...\n")
-    for i in range(1, rod_info["num_labels"]):
+    for i in tqdm(range(1, rod_info["num_labels"]), desc="Processing rods"):
         # Loop over the connected components, 0 is the background
-        logging.info("Processing rod {}...".format(i))
+        logging.info("\nProcessing rod {}...".format(i))
         # Get the masked image, now the image will contain only one rod
         comp = get_connected_component(rod_info["labels"], i)
 
@@ -246,7 +254,7 @@ def detect_rods_blob(image, min_area=None, visualize=True):
 
             # Draw the center mass
             m = mc[0]
-            cv2.circle(output, (int(m[0]), int(m[1])), 4, (255, 0, 255), -1)
+            cv2.circle(output, (int(m[0]), int(m[1])), 3, (255, 0, 255), -1)
             cv2.putText(
                 output,
                 str(i),
@@ -258,25 +266,25 @@ def detect_rods_blob(image, min_area=None, visualize=True):
             )
 
             # Draw the MER
-            cv2.drawContours(output, [box], -1, (0, 0, 255), 1)
+            # cv2.drawContours(output, [box], -1, (255, 255, 255), 1)
 
             # Draw the contours
             cv2.drawContours(output, ext_contours, -1, (255, 0, 0), 1)
             cv2.drawContours(output, holes_contours, -1, (0, 255, 0), 1)
 
             # Draw the major and minor axes
-            cv2.line(output, (MA[0], MA[1]), (MA[2], MA[3]), (255, 0, 255), 1)
+            # cv2.line(output, (MA[0], MA[1]), (MA[2], MA[3]), (255, 0, 255), 1)
             # cv2.line(output, (ma[0], ma[1]), (ma[2], ma[3]), (0, 0, 255), 1)
 
-            cv2.circle(output, tuple(p_left), 2, (255, 0, 0), -1)       # red
-            cv2.circle(output, tuple(p_right), 2, (0, 0, 255), -1)      # blue
+            # cv2.circle(output, tuple(p_left), 2, (255, 0, 0), -1)       # red
+            # cv2.circle(output, tuple(p_right), 2, (0, 0, 255), -1)      # blue
 
             # # Draw the horizontal line passing through the barycenter
             # cv2.line(output, (0, m[1]), (img.shape[1], m[1]), (0, 255, 0), 1)
             
-        logging.info("\n" + "*^" * 50 + "\n")
+        logging.info("*^" * 50 + "\n")
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(10, 10))
     im = ax.imshow(output)
     plt.show()
 

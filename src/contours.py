@@ -26,7 +26,7 @@ def find_contours(img):
     # Get the contours of the rod, RETR_CCOMP retrieves all of the contours and organizes
     # them into a two-level hierarchy
     _, contours, hierarchy = cv2.findContours(
-        working_img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE
+        working_img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
     )
 
     # Get the external contours, those are the contours of the rod
