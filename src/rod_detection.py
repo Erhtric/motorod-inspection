@@ -27,13 +27,13 @@ def detect_contact_points(img, min_area):
     contact_points : list
         List of contact points.
     """
-    _, contours, hierarchy = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    _, contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     contact_points = []
-    for i, contour in enumerate(contours):
+    for contour in contours:
         if cv2.contourArea(contour) > min_area:
             # Approximate the contour with a polygon
-            # contour = cv2.approxPolyDP(contour, 2, True)
+            contour = cv2.approxPolyDP(contour, 3, True)
             contoursHull = cv2.convexHull(contour, returnPoints=False)
             defects = cv2.convexityDefects(contour, contoursHull)
 
@@ -43,7 +43,7 @@ def detect_contact_points(img, min_area):
                 rect = (pt[0] - 2, pt[1] - 2, 5, 5)  # Create 5x5 Rect from defect point
 
                 non_zero_pixels = np.count_nonzero(img[rect[1]:rect[1] + rect[3], rect[0]:rect[0] + rect[2]])
-                if non_zero_pixels > 17:
+                if non_zero_pixels > 18:
                     contact_points.append(pt)
 
     return contact_points
@@ -67,18 +67,18 @@ def separate_rods(img, contact_points, distance, thickness):
     img : numpy.ndarray
         Binary Image with the rods separated.
     """
+   
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    img = cv2.dilate(img, kernel, iterations=1)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2))
+    img = cv2.erode(img, kernel, iterations=2)
+
     for i in range(len(contact_points)):
         for j in range(i + 1, len(contact_points)):
-
             if np.linalg.norm(np.array(contact_points[i]) - np.array(contact_points[j])) < distance:
-   
                 # Draw a black line between the contact points
                 cv2.line(img, contact_points[i], contact_points[j], 0, thickness)
-
-    # Create a structuring element for erosion
-    # Perform erosion
-    # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
-    # morph_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
 
     return img
 
@@ -99,7 +99,7 @@ def filter_rods_by_area(rod_info, labels, num_labels, stats, min_area):
 
     return rod_info, stats, labels, num_labels
 
-def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=True):
+def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=True, name=""):
     """
     This method detects the rods objects in the given image using blob detection and
     counts the number of holes in each rod.
@@ -152,14 +152,14 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
 
     if detect_contact_pts and min_area is not None:
         contact_points = detect_contact_points(binary_img, min_area)
-        # for pt in contact_points:
-        #     cv2.circle(output, pt, 2, (255, 255, 0), -1)
+        for c in contact_points:
+            cv2.circle(output, c, 2, (0, 255, 255), -1)
 
         binary_img = separate_rods(binary_img, contact_points, distance=20, thickness=2)
 
     # https://docs.opencv.org/3.4/d3/dc0/group__imgproc__shape.html#gae57b028a2b2ca327227c2399a9d53241
     # Find the connected components in the binary image
-    num_labels, labels, stats, centroid = cv2.connectedComponentsWithStats(binary_img, connectivity=8)
+    num_labels, labels, stats, centroid = cv2.connectedComponentsWithStats(binary_img, connectivity=4)
 
     if min_area is not None:
         logging.info("Filtering rods by area...")
@@ -258,26 +258,42 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
             cv2.putText(
                 output,
                 str(i),
-                (int(m[0]) - 25, int(m[1]) - 8),
+                (int(m[0]) - 20, int(m[1]) - 8),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (255, 0, 0),
-                1,
+                2,
             )
 
+            # Draw the center of the hole(s)
+            if n_holes > 0:
+                for h_i, hole in enumerate(holes_mc):
+                    cv2.circle(output, (int(hole[0]), int(hole[1])), 3, (0, 150, 0), -1)
+
+                    # Draw the number of the hole
+                    cv2.putText(
+                        output,
+                        str(h_i + 1),
+                        (int(hole[0]) - 3, int(hole[1]) - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.3,
+                        (0, 150, 0),
+                        1,
+                    )
+
             # Draw the MER
-            # cv2.drawContours(output, [box], -1, (255, 255, 255), 1)
+            cv2.drawContours(output, [box], -1, (100, 0, 255), 1)
 
             # Draw the contours
-            cv2.drawContours(output, ext_contours, -1, (255, 0, 0), 1)
-            cv2.drawContours(output, holes_contours, -1, (0, 255, 0), 1)
+            cv2.drawContours(output, ext_contours, -1, (200, 100, 0), 1)
+            cv2.drawContours(output, holes_contours, -1, (0, 150, 0), 1)
 
             # Draw the major and minor axes
-            # cv2.line(output, (MA[0], MA[1]), (MA[2], MA[3]), (255, 0, 255), 1)
+            cv2.line(output, (MA[0], MA[1]), (MA[2], MA[3]), (255, 0, 255), 1)
             # cv2.line(output, (ma[0], ma[1]), (ma[2], ma[3]), (0, 0, 255), 1)
 
-            # cv2.circle(output, tuple(p_left), 2, (255, 0, 0), -1)       # red
-            # cv2.circle(output, tuple(p_right), 2, (0, 0, 255), -1)      # blue
+            cv2.circle(output, tuple(p_left), 2, (255, 0, 0), -1)       # red
+            cv2.circle(output, tuple(p_right), 2, (0, 0, 255), -1)      # blue
 
             # # Draw the horizontal line passing through the barycenter
             # cv2.line(output, (0, m[1]), (img.shape[1], m[1]), (0, 255, 0), 1)
@@ -286,19 +302,11 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
 
     fig, ax = plt.subplots(figsize=(10, 10))
     im = ax.imshow(output)
+    ax.set_title(name)
+    
+    if name != "": 
+        logging.info("Saving image: {}".format(name))
+        plt.savefig("./images/" + name.replace(".BMP", "") + ".png")
     plt.show()
 
     return rod_info
-
-def detect_rods(images: list, names: List[str], visualize=True):
-    results = {}
-    for image, name in zip(images, names):
-        logging.info("Processing image: {}".format(name))
-
-        # Mute the logging
-        logging.getLogger().setLevel(logging.ERROR)
-
-        rod_info = detect_rods_blob(image, visualize=visualize)
-        results[name] = rod_info
-
-    return results

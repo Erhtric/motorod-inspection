@@ -1,4 +1,7 @@
 import cv2
+import numpy as np
+import logging
+import matplotlib.pyplot as plt
 
 def find_contours(img):
     """
@@ -26,7 +29,7 @@ def find_contours(img):
     # Get the contours of the rod, RETR_CCOMP retrieves all of the contours and organizes
     # them into a two-level hierarchy
     _, contours, hierarchy = cv2.findContours(
-        working_img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
+        working_img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE
     )
 
     # Get the external contours, those are the contours of the rod
@@ -40,13 +43,11 @@ def find_contours(img):
     holes_contours = []
     for j in range(len(hierarchy[0])):
         if hierarchy[0][j][3] != -1:
-            # first_point = np.asarray(contours[j][0])
-            # last_point = np.asarray(contours[j][-1])
-            # print("First point: {}".format(first_point))
-            # print("Last point: {}".format(last_point))
-            # print("Distance: {}".format(euclidean_distance(first_point, last_point)))
-            # If the point are not approximately the same, it is a broken contour
-
             holes_contours.append(contours[j])
+
+    # Filter small contours by area
+    # ext_contours = [contour for contour in ext_contours if cv2.contourArea(contour) > 1000]
+    holes_contours = [contour for contour in holes_contours if cv2.contourArea(contour) > 100]
+
 
     return contours, hierarchy, ext_contours, holes_contours
