@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+
 from typing import List
 from src.preprocess import apply_gaussian_filter, binarize
 from src.blob import get_axes_by_ellipse, get_width_at_mass_center, get_connected_component, get_moments, get_mass_center, find_MER, get_holes_diameter
@@ -33,6 +34,7 @@ def detect_contact_points(img, min_area):
     for contour in contours:
         if cv2.contourArea(contour) > min_area:
             # Approximate the contour with a polygon
+            # https://docs.opencv.org/3.4/d7/d1d/tutorial_hull.html
             contour = cv2.approxPolyDP(contour, 3, True)
             contoursHull = cv2.convexHull(contour, returnPoints=False)
             defects = cv2.convexityDefects(contour, contoursHull)
@@ -118,13 +120,11 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
     dict
         Dictionary containing information about the rods.
     """
-    # Set the logging level to INFO
-    logging.getLogger().setLevel(logging.INFO)
-
     img = image.copy()
-    output = image.copy()
+    output = image.copy()       # This serves only for visualization purposes
     output = cv2.cvtColor(output, cv2.COLOR_GRAY2RGB)
 
+    # Dictionary containing information about the rods
     rod_info = {
         "num_labels": None,
         "labels": None,
@@ -206,7 +206,7 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
             rod_type = "Unknown"
 
         rod_info["rod_type"].append(rod_type)
-        logging.info("Rod type: {}\n".format(rod_type))
+        logging.info("Rod type: {}".format(rod_type))
 
         # Get the minimum enclosing rectangle of the rod
         box, (_, (width, height), angle) = find_MER(ext_contours[0])
@@ -215,10 +215,9 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
         rod_info["width"].append(width)
         rod_info["angle"].append(angle)
 
-        logging.info("Rod Length: {:.4f}".format(rod_info["length"][-1]))
-        logging.info("Rod Width: {:.4f}".format(rod_info["width"][-1]))
-        logging.info("Rod Angle (deg): {:.4f}".format(rod_info["angle"][-1]))
-        logging.info("Rod Angle (rad): {:.4f}\n".format(np.deg2rad(rod_info["angle"][-1])))
+        logging.info("Rod Length: {:.2f}".format(rod_info["length"][-1]))
+        logging.info("Rod Width: {:.2f}".format(rod_info["width"][-1]))
+        logging.info("Rod Angle (deg): {:.2f}°".format(rod_info["angle"][-1]))
 
         # Get the major and minor axis of the ellipse
         MA, ma = get_axes_by_ellipse(ext_contours[0])
@@ -234,7 +233,7 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
 
         # Compute the width of the rod at the mass center
         width_mc, (p_left, p_right) = get_width_at_mass_center(binary_img, ext_contours[0], mu, mc[0])
-        logging.info("Width at mass center: {:.4f}".format(width_mc))
+        logging.info("Width at mass center: {:.2f}".format(width_mc))
 
         # Get the position of the center of the hole(s)
         # We simply compute the mass center of the internal contours
@@ -248,10 +247,9 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
         diameter = get_holes_diameter(holes_contours)
 
         rod_info["holes_diameter"].append(diameter)    
-        logging.info("Hole diameter: {}".format(diameter))
+        logging.info("Hole diameter: {}\n".format(diameter))
 
         if visualize:
-
             # Draw the center mass
             m = mc[0]
             cv2.circle(output, (int(m[0]), int(m[1])), 3, (255, 0, 255), -1)
@@ -300,13 +298,15 @@ def detect_rods_blob(image, min_area=None, detect_contact_pts=False, visualize=T
             
         logging.info("*^" * 50 + "\n")
 
-    fig, ax = plt.subplots(figsize=(10, 10))
-    im = ax.imshow(output)
-    ax.set_title(name)
-    
+    if visualize:
+        fig, ax = plt.subplots(figsize=(10, 10))
+        im = ax.imshow(output)
+        ax.set_title(name)
+        plt.show()
+        
     if name != "": 
         logging.info("Saving image: {}".format(name))
         plt.savefig("./images/" + name.replace(".BMP", "") + ".png")
-    plt.show()
+
 
     return rod_info

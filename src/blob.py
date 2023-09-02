@@ -102,7 +102,7 @@ def find_MER(contours):
     corr_height = height
     corr_width = width
 
-    # Angle and dim correction: angle returned by the method is [90, 0)
+    # Angle and dim correction: angle returned by the method is 0 and 90 degrees
     if width < height:
         corr_angle = 90 - angle
     else:
@@ -237,7 +237,7 @@ def get_width_at_mass_center(img, ext_contours, mu, mc):
         vect = np.array([j, i]) - mc
         return np.dot(MA_coeffs, vect)
 
-    MA_coeffs, angle = compute_major_axis(mu[0], mc)
+    MA_coeffs = compute_major_axis(mu[0], mc)
 
     # create a binary image representing the contour of the object
     contour_img = np.zeros_like(img)
@@ -252,9 +252,9 @@ def get_width_at_mass_center(img, ext_contours, mu, mc):
                 d = signed_distance(MA_coeffs, mc, i, j)
 
                 # Create two lists of points, one for the points on the left (positive) and one for the points on the right (negative)
-                if d > 0:
+                if d < 0:
                     left_points.append((j, i, d))
-                elif d < 0:
+                elif d > 0:
                     right_points.append((j, i, d))
 
     # Find the points with the minimum distance on the left and on the right
@@ -287,9 +287,6 @@ def compute_major_axis(mu, mc):
     -------
     numpy.ndarray
         Array of coefficients of the major axis.
-    
-    float
-        Angle of the major axis wrt the horizontal axis.
     """
 
     # Calculate the covariance matrix
@@ -311,9 +308,9 @@ def compute_major_axis(mu, mc):
     major_axis_coeffs = sorted_eigenvectors[:, 0]
 
     # Calculate the angle of the major axis
-    angle = np.arctan(major_axis_coeffs[0] / major_axis_coeffs[1]) + np.pi / 2
+    # angle = np.arctan(major_axis_coeffs[0] / major_axis_coeffs[1]) + np.pi / 2
 
     # Optionally normalize the coefficients
     major_axis_coeffs /= np.linalg.norm(major_axis_coeffs)
 
-    return major_axis_coeffs, angle
+    return major_axis_coeffs
